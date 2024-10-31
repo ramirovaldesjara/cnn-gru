@@ -1,31 +1,27 @@
 import torch
 import torch.nn as nn
-from mesh_cnn import MeshConvLayer
+from mesh_cnn import MeshCNNLayer
+from temporal_GRU import TemporalGRU
 
 
-class HybridMeshCNN_GRU(nn.Module):
-    def __init__(self, spatial_feature_size, hidden_dim, num_gru_layers):
-        super(HybridMeshCNN_GRU, self).__init__()
-        # Define MeshCNN layer
-        self.meshcnn = MeshConvLayer(in_channels=3, out_channels=spatial_feature_size)
-        # Define GRU layer
-        self.gru = nn.GRU(input_size=spatial_feature_size, hidden_size=hidden_dim, num_layers=num_gru_layers,
-                          batch_first=True)
-        # Output layer
-        self.output_layer = nn.Linear(hidden_dim, spatial_feature_size)
+class HybridModel(nn.Module):
+    def __init__(self, num_nodes, time_steps, spatial_features, hidden_size):
+        super(HybridModel, self).__init__()
+        self.mesh_cnn = MeshCNNLayer(spatial_features, hidden_size)
+        self.gru = TemporalGRU(hidden_size, hidden_size)
+        self.output_layer = nn.Linear(hidden_size, 1)  # Single output per node and time point
 
-    def forward(self, x):
-        batch_size, num_timepoints, num_nodes, node_features = x.size()
+    def forward(self, x, edge_index, mask):
+        # Step 1: Spatial feature extraction
+        spatial_features = self.mesh_cnn(x, edge_index)
 
-        spatial_features = []
-        for t in range(num_timepoints):
-            spatial_feature_t = self.meshcnn(x[:, t, :, :])  # Spatial features per timepoint
-            spatial_features.append(spatial_feature_t)
+        # Step 2: Temporal modeling with GRU
+        spatial_features = spatial_features.view(1, -1, spatial_features.size(-1))  # Reshape for GRU input
+        temporal_features = self.gru(spatial_features).squeeze(0)  # Remove batch dimension
 
-        # Stack and pass through GRU
-        spatial_features = torch.stack(spatial_features, dim=1)
-        gru_output, _ = self.gru(spatial_features)
+        # Step 3: Apply mask to predict missing values only
+        out = self.output_layer(temporal_features)
+        out = out * mask
 
-        # Final prediction layer
-        predictions = self.output_layer(gru_output)
-        return predictions
+        return out
+
